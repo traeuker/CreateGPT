@@ -13,11 +13,15 @@ def copy_weights(model):
     state_dict_to_load = {}
 
     for (key, value), (pretrained_key, pretrained_value) in zip(transformer_dict, pretrained_dict):
-        if "embedding" in key:
+        if len(value.shape) == 2 and value.shape == pretrained_value.T.shape:
+            state_dict_to_load[key] = pretrained_value.T
+            # print(f"Copied params.T: {pretrained_key} -> {key}")
+        elif value.shape == pretrained_value.shape:
             state_dict_to_load[key] = pretrained_value
-        else: 
-            # The weights are transposed because the GPT2 weights are in the shape (hidden_size, num_heads)
-            state_dict_to_load[key] = torch.transpose(pretrained_value, dim0=0, dim1=-1)
+            # print(f"Copied params:   {pretrained_key} -> {key}")
+        else:
+            raise Exception(f"Parameter shapes don't match: {key} with {value.shape} vs {pretrained_key} with {pretrained_value.shape}")
+
 
     model.load_state_dict(state_dict_to_load)
     return model

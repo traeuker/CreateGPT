@@ -9,7 +9,7 @@ import einops
 from dataclasses import dataclass
 
 
-device = torch.device("cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 @dataclass(frozen=False)
@@ -42,44 +42,30 @@ class MLP(nn.Module):
         return x
 
 
-class PositionalEncoding(nn.Module):
+# class PositionalEncoding(nn.Module):
 
-    def __init__(self, max_sequence_length: int = 32, hidden_dim: int = 128, load_existing_model=False):
-        super().__init__()
-        self.max_sequence_length = max_sequence_length
-        self.hidden_dim = hidden_dim
-        maximal_pe = self.get_maximal_pe()
+#     def __init__(self, max_sequence_length: int = 32, hidden_dim: int = 128, load_existing_model=False):
+#         super().__init__()
+#         self.max_sequence_length = max_sequence_length
+#         self.hidden_dim = hidden_dim
+#         angles = torch.outer(torch.arange(max_sequence_length), 1 / 10000 ** (2 * torch.arange(hidden_dim//2) / hidden_dim))
+#         pe = torch.zeros((max_sequence_length, hidden_dim))
+#         pe[:, ::2] = torch.sin(angles)
+#         pe[:, 1::2] = torch.cos(angles)
+        
+#         if load_existing_model:
+#             self.pe = nn.Linear(max_sequence_length, hidden_dim, bias=False)
+#         else:
+#             # Register array as a buffer, rather than parameter (we don't want it to be updated by gradient descent)
+#             self.register_buffer('pe', pe)
 
-        if load_existing_model:
-            self.maximal_pe = nn.Linear(max_sequence_length, hidden_dim)
-        else:
-            self.register_buffer('maximal_pe', maximal_pe)
 
-    def get_maximal_pe(self):
-
-        def PE(delta):
-            hidden_dim = self.hidden_dim
-
-            sin_vec = torch.sin(
-                delta / 10000**(2 * torch.arange(hidden_dim // 2) / hidden_dim))
-            cos_vec = torch.cos(
-                delta / 10000**(2 * torch.arange(hidden_dim // 2) / hidden_dim))
-
-            pe = torch.zeros(hidden_dim)
-            pe[::2] = sin_vec
-            pe[1::2] = cos_vec
-
-            return pe
-
-        pe = torch.stack([PE(i) for i in range(self.max_sequence_length)])
-        return pe
-
-    def forward(self, x):
-        '''
-        x: shape (n, seq_len, hidden_dim)
-        '''
-        x = einops.rearrange(x, '')
-        return x + self.maximal_pe[:x.size(1), :].to(device)
+#     def forward(self, x):
+#         '''
+#         x: shape (n, seq_len, hidden_dim)
+#         '''
+#         batch, seq_len, embedding_dim = x.shape
+#         return x + self.pe[:seq_len, :].to(device)
 
 
 def multihead_masked_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor,
@@ -103,7 +89,7 @@ def multihead_masked_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor
     QKT = einsum('b nh s_q h, b nh s_k h -> b nh s_q s_k', Q_, K_)
     QKT = QKT / (headsize**0.5)
     tri = torch.triu(torch.ones((seq_len, seq_len)), diagonal=1)*(-10 ** 4)
-    QKT_masked = (QKT + tri)
+    QKT_masked = (QKT + tri.to(device))
     attention_probs = torch.softmax(QKT_masked, dim=-1)
 
     attention_values_ = einsum('b nh s_q s_k, b nh s_k h -> b nh s_q h',
@@ -176,16 +162,16 @@ class DecoderOnlyTransformer(nn.Module):
         self.config = config
         self.token_embedding = nn.Embedding(
             config.vocab_size, embedding_dim=config.hidden_size)
-        self.positional_embedding = PositionalEncoding(
-            config.max_seq_len, hidden_dim=config.hidden_size, load_existing_model=True)
+        # self.positional_embedding = PositionalEncoding(
+        #     config.max_seq_len, hidden_dim=config.hidden_size, load_existing_model=False)
         self.positional_embedding = nn.Embedding(
-            config.max_seq_len, embedding_dim=config.hidden_size,)
+            config.max_seq_len, config.hidden_size)
         self.dropout = nn.Dropout(p=config.dropout)
         self.decoder_blocks = nn.Sequential(
             *[DecoderBlock(config) for _ in range(config.num_layers)])
         self.layer_norm_final = nn.LayerNorm(
             config.hidden_size, config.layer_norm_epsilon)
-        self.pos_vector = torch.arange(0, config.max_seq_len)
+        self.pos_vector = torch.arange(0, config.max_seq_len).to(device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         '''
@@ -194,8 +180,7 @@ class DecoderOnlyTransformer(nn.Module):
         '''
         x1 = self.token_embedding(x)
         x2 = self.positional_embedding(self.pos_vector[:x.shape[-1]])
-        x = x1 + x2
-        x = self.dropout(x)
+        x = self.dropout(x1 + x2)
         x = self.decoder_blocks(x)
         x = self.layer_norm_final(x)
         x = einsum('word emb, b seq emb -> b seq word',
