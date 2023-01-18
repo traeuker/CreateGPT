@@ -10,3 +10,7 @@ fancy_einsum==0.0.3
 tqdm==4.64.1
 wandb==0.13.5
 ```
+
+## [Try in Colab!](https://colab.research.google.com/drive/1JZxeCkI52-Wh8QRwloPxXGswc0d0f6XI?usp=sharing)
+It is the ```run.ipnyb``` file uploaded and ready to run in Google Colab.
+
